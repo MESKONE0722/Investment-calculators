@@ -6,7 +6,6 @@ import yfinance as yf
 import time
 
 st.set_page_config(page_title="Investment Calculators", layout="wide", page_icon="📈")
-st.experimental_singleton.clear()
 
 def currency_fmt(x): return f"${x:,.2f}"
 
@@ -36,7 +35,6 @@ def sip_schedule(monthly_contrib, rate, years):
     return pd.DataFrame(data)
 
 st.title("📊 Investment Calculators")
-
 tabs = st.tabs(["Compound Interest", "DCA / SIP", "ETF Performance"])
 
 # --- Compound Interest Tab ---
