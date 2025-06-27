@@ -3,61 +3,71 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Investment Calculators", layout="wide")
+st.set_page_config(page_title="Investment Calculator", layout="wide")
 
 def currency_fmt(x):
     return f"${x:,.2f}"
 
-def compound_interest(start, rate, years, freq, contrib):
-    schedule = []
-    balance = start
+def compound_schedule(principal, annual_contrib, rate, years, freq):
     r = rate / 100 / freq
-    for y in range(1, years + 1):
+    balance = principal
+    data = []
+    for year in range(1, years + 1):
         for _ in range(freq):
-            balance = balance * (1 + r) + contrib / freq
-        interest = balance - start - contrib * y
-        schedule.append([y, contrib * y, interest, balance])
-    return pd.DataFrame(schedule, columns=["Year", "Contributions", "Interest", "Ending Balance"])
+            balance = balance * (1 + r) + annual_contrib / freq
+        total_contrib = principal + annual_contrib * year
+        interest = balance - principal - (annual_contrib * year)
+        data.append({
+            "Year": year,
+            "Deposit": annual_contrib if year > 1 else principal + annual_contrib,
+            "Interest": interest,
+            "Ending Balance": balance
+        })
+    return pd.DataFrame(data)
 
-st.title("📊 Investment Calculators")
+st.title("📈 Compound Interest Calculator")
+st.markdown("### Accumulation Schedule")
 
-# Define tab structure BEFORE using it
-tabs = st.tabs([
-    "Compound Interest", "Dividend Income", "SIP / DCA",
-    "FIRE", "Loan Payoff", "ROI Calculator"
-])
-
-with tabs[0]:
-    st.header("🧮 Compound Interest (Enhanced)")
-
-    # Layout controls
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        start = st.number_input("Initial Amount ($)", min_value=0.0, value=10000.0, step=100.0)
-        contrib = st.number_input("Annual Contribution ($)", min_value=0.0, value=12000.0, step=100.0)
-    with col2:
-        period_type = st.selectbox("Period Type", ["Years", "Months"])
-        duration = st.slider("Duration", min_value=1, max_value=50, value=10)
-        rate = st.slider("Annual Interest Rate (%)", 0.0, 20.0, 7.0, 0.1)
-    with col3:
-        freq_label = st.selectbox("Compounding Frequency", ["Daily", "Monthly", "Quarterly", "Annually"])
-        drip = st.checkbox("Reinvest Interest (DRIP)", True)
-
-    # Convert to usable values
-    freq_map = {"Daily": 365, "Monthly": 12, "Quarterly": 4, "Annually": 1}
+# Inputs
+col1, col2 = st.columns(2)
+with col1:
+    principal = st.number_input("Initial Investment", value=20000.0, step=1000.0, format="%.2f")
+    annual_contrib = st.number_input("Annual Contribution", value=12000.0, step=1000.0, format="%.2f")
+    years = st.slider("Years to Grow", 1, 50, 10)
+with col2:
+    rate = st.slider("Annual Interest Rate (%)", 0.0, 15.0, 8.0, step=0.1)
+    freq_label = st.selectbox("Compounding Frequency", ["Annually", "Quarterly", "Monthly"])
+    freq_map = {"Annually": 1, "Quarterly": 4, "Monthly": 12}
     freq = freq_map[freq_label]
-    years = duration if period_type == "Years" else duration / 12
 
-    if st.button("📊 Calculate"):
-        df = compound_interest(start, rate, int(np.ceil(years)), freq, contrib)
-        df_display = df.copy()
-        for col in ["Contributions", "Interest", "Ending Balance"]:
-            df_display[col] = df_display[col].apply(currency_fmt)
-        st.dataframe(df_display, use_container_width=True)
+if st.button("📊 Calculate"):
+    df = compound_schedule(principal, annual_contrib, rate, years, freq)
 
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=df["Year"], y=df["Contributions"], name="Contributions"))
-        fig.add_trace(go.Bar(x=df["Year"], y=df["Interest"], name="Interest"))
-        fig.add_trace(go.Scatter(x=df["Year"], y=df["Ending Balance"], name="Ending Balance", mode="lines+markers"))
-        fig.update_layout(barmode="stack", yaxis_title="USD", title="Growth Breakdown")
-        st.plotly_chart(fig, use_container_width=True)
+    # Pie chart breakdown
+    final = df["Ending Balance"].iloc[-1]
+    total_contrib = principal + annual_contrib * years
+    total_interest = final - total_contrib
+
+    pie_chart = go.Figure(data=[go.Pie(
+        labels=["Starting Amount", "Total Contributions", "Interest"],
+        values=[principal, annual_contrib * years, total_interest],
+        marker=dict(colors=["#3366cc", "#99cc00", "#cc3333"])
+    )])
+    st.plotly_chart(pie_chart, use_container_width=True)
+
+    # Bar chart
+    st.markdown("### Growth Over Time")
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Starting Amount", x=df["Year"], y=[principal]*years, marker_color="#3366cc"))
+    fig.add_trace(go.Bar(name="Contributions", x=df["Year"], y=[annual_contrib]*years, marker_color="#99cc00"))
+    fig.add_trace(go.Bar(name="Interest", x=df["Year"], y=df["Interest"], marker_color="#cc3333"))
+    fig.update_layout(barmode='stack', yaxis_title="USD", xaxis_title="Year")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Table display
+    st.markdown("### Annual Schedule")
+    df_display = df.copy()
+    df_display["Deposit"] = df_display["Deposit"].apply(currency_fmt)
+    df_display["Interest"] = df_display["Interest"].apply(currency_fmt)
+    df_display["Ending Balance"] = df_display["Ending Balance"].apply(currency_fmt)
+    st.dataframe(df_display, use_container_width=True)
