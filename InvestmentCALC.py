@@ -4,113 +4,84 @@ import numpy as np
 import plotly.graph_objects as go
 import yfinance as yf
 
-st.set_page_config(page_title="Investment Calculators", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Investment Calculator", layout="centered")
 
-def currency_fmt(x): return f"${x:,.2f}"
+# Formatting helper
+def to_currency(x): return f"${x:,.2f}"
 
-def compound_schedule(principal, annual_contrib, rate, years, freq):
-    r = rate / 100 / freq
-    balance = principal
-    data = []
-    for year in range(1, years+1):
-        for _ in range(freq):
-            balance = balance * (1 + r) + annual_contrib / freq
-        interest = balance - (principal + annual_contrib*year)
-        data.append({
-            "Year": year,
-            "Deposit": annual_contrib if year > 1 else principal + annual_contrib,
-            "Interest": interest,
-            "Ending Balance": balance
-        })
-    return pd.DataFrame(data)
+st.title("📈 Monthly DCA Investment Simulator")
 
-def sip_schedule(start_principal, monthly_contrib, rate, years):
-    r = rate / 100 / 12
-    balance = start_principal
-    data = []
-    for m in range(1, years * 12 + 1):
-        balance = balance * (1 + r) + monthly_contrib
-        data.append({
-            "Month": m,
-            "Total Contributed": start_principal + monthly_contrib * m,
-            "Balance": balance
-        })
-    return pd.DataFrame(data)
+# Inputs
+col1, col2 = st.columns(2)
+with col1:
+    principal = st.number_input("🧩 Starting Principal ($)", min_value=0.0, value=500.0, step=100.0)
+    monthly = st.number_input("💵 Monthly Contribution ($)", min_value=0.0, value=500.0, step=50.0)
+with col2:
+    years = st.slider("🕰 Duration (years)", min_value=1, max_value=50, value=30)
+    etfs = st.multiselect("📊 ETFs (max 5)", ["SPY", "QQQ", "JEPI", "JEPQ", "SGOV"], default=["SPY", "QQQ"])
 
-st.title("📊 Investment Calculators")
-tabs = st.tabs(["Compound Interest", "DCA / SIP", "ETF Performance"])
+# Portfolio allocation
+alloc = {}
+if etfs:
+    st.subheader("⚖️ Portfolio Allocation")
+    cols = st.columns(len(etfs))
+    for i, ticker in enumerate(etfs):
+        alloc[ticker] = cols[i].slider(f"{ticker} %", min_value=0, max_value=100, value=int(100/len(etfs)))
+    total_pct = sum(alloc.values())
+    if total_pct != 100:
+        st.error(f"Total allocation must equal 100% (currently {total_pct}%)")
 
-# --- Compound Interest Tab ---
-with tabs[0]:
-    st.header("🧮 Compound Interest Calculator")
-    principal = st.number_input("Initial Investment ($)", min_value=0.0, value=1000.0)
-    annual_contrib = st.number_input("Annual Contribution ($)", min_value=0.0, value=1200.0)
-    rate = st.slider("Expected Annual Return (%)", 0.0, 20.0, 7.0)
-    years = st.slider("Investment Duration (Years)", 1, 50, 20)
-    freq = st.selectbox("Compounding Frequency", [1, 4, 12],
-                        format_func=lambda x: {1: "Yearly", 4: "Quarterly", 12: "Monthly"}[x])
-    if st.button("Calculate Compound Interest"):
-        df = compound_schedule(principal, annual_contrib, rate, years, freq)
-        st.line_chart(df.set_index("Year")["Ending Balance"])
-        st.dataframe(df.style.format({
-            "Deposit": "${:,.2f}",
-            "Interest": "${:,.2f}",
-            "Ending Balance": "${:,.2f}"
-        }), use_container_width=True)
+if st.button("🚀 Run Simulation") and etfs and total_pct == 100:
+    months = years * 12
+    dates = pd.date_range(end=pd.Timestamp.today(), periods=months, freq='M')
+    
+    df = pd.DataFrame(index=dates)
+    df["Principal Paid"] = 0.0
+    df["Portfolio Value"] = 0.0
+    
+    df["Contribution"] = monthly
+    df.iloc[0, df.columns.get_loc("Contribution")] += principal
 
-# --- DCA / SIP Tab ---
-with tabs[1]:
-    st.header("💸 DCA / SIP with Starting Principal")
-    start_principal = st.number_input("Starting Investment ($)", min_value=0.0, value=500.0)
-    monthly = st.number_input("Monthly Contribution ($)", min_value=0.0, value=500.0)
-    rate2 = st.slider("Expected Annual Return (%)", 0.0, 20.0, 8.0)
-    years2 = st.slider("Duration (Years)", 1, 50, 10)
-    if st.button("Calculate DCA"):
-        df2 = sip_schedule(start_principal, monthly, rate2, years2)
-        st.line_chart(df2.set_index("Month")["Balance"])
-        st.dataframe(df2.style.format({
-            "Total Contributed": "${:,.2f}",
-            "Balance": "${:,.2f}"
-        }), use_container_width=True)
+    balances = {t: 0.0 for t in etfs}
+    alloc_frac = {t: p / 100 for t, p in alloc.items()}
+    
+    hist = {}
+    for t in etfs:
+        hist[t] = yf.Ticker(t).history(period=f"{years}y", interval="1mo")["Close"].reindex(dates, method='ffill')
+    
+    for i, date in enumerate(dates):
+        # Contribute
+        contrib = df["Contribution"].iloc[i]
+        for t in etfs:
+            balances[t] += contrib * alloc_frac[t] / hist[t].iloc[i]  # shares added
 
-# --- ETF Performance Tab ---
-with tabs[2]:
-    st.header("📈 Live ETF Performance Simulator")
-    tickers = st.multiselect("Select ETFs", ["SPY", "QQQ", "JEPI", "JEPQ"], default=["SPY", "QQQ"])
-    invest_method = st.selectbox("Investment Method", ["Lump Sum", "Monthly DCA"])
-    amount = st.number_input("Total Investment Amount ($)", min_value=0.0, value=10000.0)
-    months = st.slider("Duration (Months)", 1, 120, 12)
-    drip = st.checkbox("Enable DRIP (reinvest dividends)", True)
+        # Revalue
+        total_val = sum(balances[t] * hist[t].iloc[i] for t in etfs)
+        df["Portfolio Value"].iloc[i] = total_val
+        paid = principal + monthly * i
+        df["Principal Paid"].iloc[i] = paid
 
-    if st.button("🚀 Simulate ETF Performance"):
-        for ticker in tickers:
-            data = yf.Ticker(ticker).history(period=f"{months}mo", interval="1mo")
-            prices = data['Close']
-            if prices.empty:
-                st.warning(f"No data found for {ticker}.")
-                continue
+    # Plot chart
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["Principal Paid"], mode="lines", name="Principal Paid", line=dict(color="#1f77b4")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["Portfolio Value"], mode="lines", name="Portfolio Value", line=dict(color="#2ca02c")))
+    fig.update_layout(title="Investment Value Over Time", xaxis_title="Date", yaxis_title="Amount ($)",
+                      hovermode="x unified", template="simple_white")
+    st.plotly_chart(fig, use_container_width=True)
 
-            if invest_method == "Lump Sum":
-                shares = amount / prices.iloc[0]
-                final_value = shares * prices.iloc[-1]
-            else:
-                shares = 0
-                for price in prices:
-                    monthly_amount = amount / months
-                    shares += (monthly_amount / price) * (1 + (0.0 if not drip else 0))
-                final_value = shares * prices.iloc[-1]
+    # Display summary metrics
+    final = df["Portfolio Value"].iloc[-1]
+    st.markdown(f"**📌 Final Value:** {to_currency(final)} &nbsp;&nbsp;&nbsp; **💰 Principal Paid:** {to_currency(df['Principal Paid'].iloc[-1])} &nbsp;&nbsp;&nbsp; **📈 Gain:** {to_currency(final - df['Principal Paid'].iloc[-1])}")
 
-            profit = final_value - amount
-            roi = profit / amount * 100
+    # Show table
+    yearly = df.resample("Y").last()
+    yearly["Principal Paid"] = yearly["Principal Paid"]
+    yearly["Gain"] = yearly["Portfolio Value"] - yearly["Principal Paid"]
+    yearly_display = yearly[["Principal Paid", "Gain", "Portfolio Value"]].copy()
+    yearly_display.index = yearly_display.index.year
+    yearly_display.columns = ["Principal Paid", "Gain", "Total Value"]
+    st.dataframe(yearly_display.style.format(to_currency))
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader(f"{ticker} Summary")
-                st.metric("Final Value", currency_fmt(final_value))
-                st.metric("Profit", currency_fmt(profit))
-                st.metric("ROI (%)", f"{roi:.2f}%")
-            with col2:
-                fig = go.Figure(go.Scatter(
-                    x=prices.index, y=prices.values, mode="lines", name=ticker))
-                fig.update_layout(xaxis_title="Date", yaxis_title="Price ($)")
-                st.plotly_chart(fig, use_container_width=True)
+else:
+    if etfs:
+        st.info("🎯 Set allocation to total 100%, then click **Run Simulation**")
